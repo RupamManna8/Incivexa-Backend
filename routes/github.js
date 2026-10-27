@@ -85,7 +85,7 @@ router.get('/repos', async (req, res) => {
   }
 
   try {
-    const response = await fetch('https://api.github.com/user/repos?per_page=100&sort=updated', {
+    const response = await fetch('https://api.github.com/user/repos?visibility=all&affiliation=owner,collaborator,organization_member&sort=updated&per_page=100', {
       headers: {
         'Authorization': `Bearer ${token}`,
         'User-Agent': 'Autonomous-Incident-Manager',
@@ -107,7 +107,8 @@ router.get('/repos', async (req, res) => {
       htmlUrl: r.html_url,
       cloneUrl: r.clone_url,
       defaultBranch: r.default_branch || 'main',
-      isPrivate: r.private,
+      isPrivate: Boolean(r.private),
+      visibility: r.private ? 'private' : 'public',
       description: r.description || '',
       updatedAt: r.updated_at
     }));

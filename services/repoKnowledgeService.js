@@ -29,13 +29,25 @@ const CODE_EXTENSIONS = new Set([
 function resolveLocalRepoPath(repoUrl) {
   if (!repoUrl) return null;
 
-  // Direct paths
-  const directPath = path.resolve(ROOT_DIR, repoUrl);
+  // Direct paths (relative to ROOT_DIR or absolute)
+  const directPath = path.isAbsolute(repoUrl) ? repoUrl : path.resolve(ROOT_DIR, repoUrl);
   if (fs.existsSync(directPath)) return directPath;
 
-  // Check demo-repo
-  const demoPath = path.resolve(ROOT_DIR, 'demo-repo');
-  if (fs.existsSync(demoPath)) return demoPath;
+  // Check investigation-engine .repo_cache
+  const cacheDir = path.resolve(ROOT_DIR, 'investigation-engine/.repo_cache');
+  if (fs.existsSync(cacheDir)) {
+    try {
+      const cleanName = path.basename(repoUrl, '.git').replace(/[^a-zA-Z0-9]/g, '_');
+      const entries = fs.readdirSync(cacheDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory() && entry.name.toLowerCase().includes(cleanName.toLowerCase())) {
+          return path.join(cacheDir, entry.name);
+        }
+      }
+    } catch {
+      // cache directory scan failed
+    }
+  }
 
   // Check sandbox repos
   const sandboxRepo = path.resolve(ROOT_DIR, 'sandbox_data/repos', path.basename(repoUrl, '.git'));
@@ -169,8 +181,8 @@ export async function extractRepositoryKnowledge(repoUrl, options = {}) {
   const fallbackRepoName = options.name || (repoUrl ? path.basename(repoUrl, '.git') : 'monitored-service');
 
   if (!repoDir) {
-    // Return structured baseline knowledge
-    return createBaselineKnowledge(fallbackRepoName, repoUrl);
+    // Return structured empty knowledge when repository has not yet been cloned or analyzed
+    return createEmptyKnowledge(fallbackRepoName, repoUrl);
   }
 
   const pkgInfo = extractPackageJson(repoDir);
@@ -326,67 +338,28 @@ export async function extractRepositoryKnowledge(repoUrl, options = {}) {
 }
 
 /**
- * Baseline fallback knowledge when repository has not yet been cloned locally
+ * Empty knowledge structure when repository has not yet been cloned locally or has no data
  */
-function createBaselineKnowledge(repoName, repoUrl) {
-  const nodes = [
-    { id: `service:${repoName}`, label: repoName, type: 'service', status: 'monitored' },
-    { id: 'module:src/server.js', label: 'server.js', path: 'src/server.js', lines: 140, type: 'module' },
-    { id: 'module:src/order_service.js', label: 'order_service.js', path: 'src/order_service.js', lines: 75, type: 'module' },
-    { id: 'module:src/checkout.js', label: 'checkout.js', path: 'src/checkout.js', lines: 95, type: 'module' },
-    { id: 'pkg:express', label: 'express', version: '^4.18.2', type: 'package', category: 'Web Framework' },
-    { id: 'pkg:incivexa', label: 'incivexa', version: '^1.1.0', type: 'package', category: 'Telemetry SDK' },
-    { id: 'pkg:dotenv', label: 'dotenv', version: '^16.3.1', type: 'package', category: 'Config' },
-    { id: 'endpoint:POST /api/v1/orders/checkout', label: 'POST /api/v1/orders/checkout', type: 'endpoint' },
-    { id: 'endpoint:POST /api/v1/payments/charge', label: 'POST /api/v1/payments/charge', type: 'endpoint' }
-  ];
-
-  const edges = [
-    { source: `service:${repoName}`, target: 'module:src/server.js', relation: 'contains' },
-    { source: `service:${repoName}`, target: 'module:src/order_service.js', relation: 'contains' },
-    { source: 'module:src/server.js', target: 'module:src/order_service.js', relation: 'imports' },
-    { source: 'module:src/server.js', target: 'module:src/checkout.js', relation: 'imports' },
-    { source: 'module:src/server.js', target: 'pkg:express', relation: 'depends_on' },
-    { source: 'module:src/server.js', target: 'pkg:incivexa', relation: 'monitored_by' },
-    { source: 'module:src/server.js', target: 'endpoint:POST /api/v1/orders/checkout', relation: 'exposes' },
-    { source: 'module:src/checkout.js', target: 'endpoint:POST /api/v1/payments/charge', relation: 'exposes' }
-  ];
-
-  const blastRadius = {
-    'src/checkout.js': ['src/server.js'],
-    'src/order_service.js': ['src/server.js']
-  };
-
+function createEmptyKnowledge(repoName, repoUrl) {
   return {
-    repoUrl: repoUrl || './demo-repo',
-    name: repoName,
-    files: ['src/server.js', 'src/order_service.js', 'src/checkout.js', 'package.json'],
-    fileDetails: [
-      { path: 'src/server.js', name: 'server.js', lines: 140, symbolCount: 5, endpointCount: 2 },
-      { path: 'src/order_service.js', name: 'order_service.js', lines: 75, symbolCount: 3, endpointCount: 1 },
-      { path: 'src/checkout.js', name: 'checkout.js', lines: 95, symbolCount: 4, endpointCount: 1 }
-    ],
-    chunkCount: 18,
-    symbolsCount: 12,
-    symbols: [
-      { name: 'startServer', type: 'function', file: 'src/server.js' },
-      { name: 'processOrder', type: 'function', file: 'src/order_service.js' },
-      { name: 'processPayment', type: 'function', file: 'src/checkout.js' }
-    ],
-    endpoints: [
-      { method: 'POST', path: '/api/v1/orders/checkout', file: 'src/server.js' },
-      { method: 'POST', path: '/api/v1/payments/charge', file: 'src/checkout.js' }
-    ],
-    packages: { express: '^4.18.2', incivexa: '^1.1.0', dotenv: '^16.3.1' },
+    repoUrl: repoUrl || '',
+    name: repoName || 'No repository',
+    files: [],
+    fileDetails: [],
+    chunkCount: 0,
+    symbolsCount: 0,
+    symbols: [],
+    endpoints: [],
+    packages: {},
     dependencyGraph: {
-      nodes,
-      edges,
-      blastRadius,
+      nodes: [],
+      edges: [],
+      blastRadius: {},
       stats: {
-        totalModules: 3,
-        totalPackages: 3,
-        totalEndpoints: 2,
-        totalInternalLinks: 2
+        totalModules: 0,
+        totalPackages: 0,
+        totalEndpoints: 0,
+        totalInternalLinks: 0
       }
     }
   };

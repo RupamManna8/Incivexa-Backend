@@ -4,7 +4,9 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const DETECTOR_API_URL = process.env.DETECTOR_API_URL || 'http://localhost:8000';
-const INVESTIGATION_API_URL = process.env.INVESTIGATION_API_URL || 'http://localhost:8001';
+const INVESTIGATION_API_URL = (process.env.INVESTIGATION_API_URL && !process.env.INVESTIGATION_API_URL.includes(':8001')) 
+  ? process.env.INVESTIGATION_API_URL 
+  : (process.env.AI_ENGINE_URL || 'http://localhost:8000');
 
 /**
  * Maps SDK-level severity strings to the log_level format expected

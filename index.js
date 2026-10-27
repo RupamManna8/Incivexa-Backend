@@ -12,6 +12,8 @@ import { router as incidentsRouter } from './routes/incidents.js';
 import { router as statsRouter } from './routes/stats.js';
 import { router as servicesRouter } from './routes/services.js';
 import { router as sandboxRouter } from './routes/sandbox.js';
+import { router as notificationsRouter } from './routes/notifications.js';
+import { router as webhooksRouter } from './routes/webhooks.js';
 import { cleanDatabase } from './scripts/clean-db.js';
 import { startStatsRollupScheduler } from './processor/statsRollup.js';
 import { startWorker } from './processor/worker.js';
@@ -38,8 +40,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// JSON body parser
-app.use(express.json({ limit: '10mb' }));
+// JSON body parser with raw body buffer capture for webhook HMAC signature verification
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 
 // Health Check
 app.get('/health', (req, res) => {
@@ -57,6 +64,7 @@ app.get('/health', (req, res) => {
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/github', githubRouter);
 app.use('/api/v1/repositories', repositoriesRouter);
+app.use('/api/v1/webhooks', webhooksRouter);
 
 // Projects & Keys
 app.use('/api/v1/projects', projectsRouter);
@@ -71,6 +79,9 @@ app.use('/api/v1/incidents', incidentsRouter);
 // Stats & Metrics
 app.use('/api/v1/projects/:projectId/stats', statsRouter);
 app.use('/api/v1/stats', statsRouter);
+
+// Notifications
+app.use('/api/v1/notifications', notificationsRouter);
 
 // Engine & Services Health Probe
 app.use('/api/v1/services', servicesRouter);

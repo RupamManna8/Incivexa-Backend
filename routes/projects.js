@@ -2,6 +2,7 @@ import { Router } from 'express';
 import mongoose from 'mongoose';
 import { Project } from '../models/Project.js';
 import { ApiKey } from '../models/ApiKey.js';
+import { Repository } from '../models/Repository.js';
 import { createApiKey, listApiKeys, revokeApiKey } from '../services/keyService.js';
 import { isDbConnected } from '../config/database.js';
 import { optionalUserAuth } from '../middleware/userAuth.js';
@@ -188,8 +189,13 @@ router.delete('/:projectId', async (req, res) => {
 
   try {
     if (isDbConnected() && mongoose.Types.ObjectId.isValid(projectId)) {
-      await Project.findByIdAndDelete(projectId);
-      await ApiKey.deleteMany({ projectId });
+      const pid = new mongoose.Types.ObjectId(projectId);
+      await Project.findByIdAndDelete(pid);
+      await ApiKey.deleteMany({ projectId: pid });
+      await Repository.deleteMany({ projectId: pid });
+      if (mongoose.models.Notification) {
+        await mongoose.models.Notification.deleteMany({ projectId: pid });
+      }
       return res.json({ success: true, message: 'Project deleted' });
     }
 

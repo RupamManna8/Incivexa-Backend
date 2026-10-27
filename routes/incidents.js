@@ -141,6 +141,14 @@ router.patch('/:incidentId/status', async (req, res) => {
       });
 
       await incident.save();
+
+      if (status === 'RESOLVED' && mongoose.models.Notification) {
+        await mongoose.models.Notification.updateMany(
+          { incidentId: incident._id },
+          { $set: { read: true, readAt: new Date() } }
+        ).catch(() => {});
+      }
+
       return res.json({ success: true, incident });
     }
 

@@ -29,7 +29,7 @@ export async function cleanDatabase(options = {}) {
 
   console.log('[DBClean] Found collections:', collectionNames);
 
-  const purgeList = ['telemetryevents', 'events', 'incidents', 'investigations', 'sandbox_jobs', 'sandbox_results', 'stats'];
+  const purgeList = ['telemetryevents', 'events', 'incidents', 'investigations', 'sandbox_jobs', 'sandbox_results', 'stats', 'notifications'];
   if (!preserveProjects) {
     purgeList.push('repositories');
   }
@@ -41,6 +41,20 @@ export async function cleanDatabase(options = {}) {
       const res = await db.collection(colName).deleteMany({});
       stats[colName] = res.deletedCount;
       console.log(`[DBClean] Purged ${res.deletedCount} documents from '${colName}'.`);
+    }
+  }
+
+  // Deduplicate any orphaned/multiple repositories per project
+  if (collectionNames.includes('repositories')) {
+    const repos = await db.collection('repositories').find().sort({ updatedAt: -1, _id: -1 }).toArray();
+    const seen = new Set();
+    for (const r of repos) {
+      const key = String(r.projectId);
+      if (seen.has(key)) {
+        await db.collection('repositories').deleteOne({ _id: r._id });
+      } else {
+        seen.add(key);
+      }
     }
   }
 
