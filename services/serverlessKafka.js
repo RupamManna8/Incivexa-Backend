@@ -122,6 +122,10 @@ async function kafkaRestRequest(targetUrl, method = 'GET', body = null, extraHea
   });
 }
 
+// Circuit breaker for unreachable cluster
+let lastUnreachableNotice = 0;
+let clusterUnreachableCooldownUntil = 0;
+
 /**
  * Produce a batch of events to Serverless Kafka topic
  *
@@ -136,6 +140,11 @@ export async function produceServerlessEvents(topic, events, partitionKey = null
     return { success: false, error: 'Serverless Kafka not configured' };
   }
 
+  // Fast circuit-breaker skip if cluster was recently unreachable
+  if (Date.now() < clusterUnreachableCooldownUntil) {
+    return { success: false, fallback: true, error: 'Serverless Kafka cluster unreachable (circuit breaker active)' };
+  }
+
   const targetTopic = topic || config.topic;
   const endpoint = `${config.baseUrl}/topics/${targetTopic}`;
 
@@ -148,6 +157,7 @@ export async function produceServerlessEvents(topic, events, partitionKey = null
     const res = await kafkaRestRequest(endpoint, 'POST', { records });
 
     if (res.status === 200) {
+      clusterUnreachableCooldownUntil = 0;
       return { success: true, offsets: res.data?.offsets };
     }
 
@@ -160,7 +170,15 @@ export async function produceServerlessEvents(topic, events, partitionKey = null
     console.warn(`[Serverless Kafka] Produce returned status ${res.status}:`, res.data);
     return { success: false, status: res.status, error: res.data };
   } catch (err) {
-    console.warn(`[Serverless Kafka] Produce failed (${err.message}). Falling back to direct dispatch.`);
+    const isConnOrDnsError = err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED' || err.message?.includes('ENOTFOUND');
+    if (isConnOrDnsError) {
+      clusterUnreachableCooldownUntil = Date.now() + 30000;
+    }
+
+    if (Date.now() - lastUnreachableNotice > 30000) {
+      console.warn(`[Serverless Kafka] Produce notice (${err.message}). Telemetry routing via direct processor fallback.`);
+      lastUnreachableNotice = Date.now();
+    }
     return { success: false, error: err.message };
   }
 }
@@ -209,6 +227,7 @@ export class ServerlessKafkaConsumer {
     this.isRunning = false;
     this.baseUri = null;
     this.pollingTimer = null;
+    this.retryAttempts = 0;
   }
 
   async start() {
@@ -260,11 +279,24 @@ export class ServerlessKafkaConsumer {
         console.log(`[Serverless Consumer] Subscribed to topic '${this.topic}'. Polling for telemetry events...`);
       }
 
+      this.retryAttempts = 0;
+      clusterUnreachableCooldownUntil = 0;
+
       // Step 3: Begin Polling Loop
       this._poll();
     } catch (err) {
-      console.warn(`[Serverless Consumer] Setup error (${err.message}). Retrying in 10s...`);
-      this._scheduleRetry(10000);
+      this.retryAttempts++;
+      const isDnsError = err.code === 'ENOTFOUND' || err.message?.includes('ENOTFOUND');
+      const delay = isDnsError ? Math.min(60000, 15000 * Math.min(this.retryAttempts, 4)) : 10000;
+
+      if (this.retryAttempts === 1) {
+        console.warn(`[Serverless Consumer] Setup notice (${err.message}).`);
+        console.warn(`[Serverless Consumer] Notice: Cloud Kafka cluster is unreachable. Ingestion is actively running in Direct Processor fallback mode.`);
+        console.warn(`[Serverless Consumer] Tip: To silence retries, set KAFKA_ENABLED=false or comment out KAFKA_AIVEN_URL in .env.`);
+      } else if (this.retryAttempts % 6 === 0) {
+        console.warn(`[Serverless Consumer] Background retry: Kafka cluster still unreachable (${err.message}). Retrying in ${Math.round(delay / 1000)}s...`);
+      }
+      this._scheduleRetry(delay);
     }
   }
 
