@@ -9,6 +9,8 @@ import { router as repositoriesRouter } from './routes/repositories.js';
 import { router as projectsRouter, seedDefaultProject } from './routes/projects.js';
 import { router as ingestRouter } from './routes/ingest.js';
 import { router as incidentsRouter } from './routes/incidents.js';
+import { router as fixesRouter } from './routes/fixes.js';
+import { router as pullRequestsRouter } from './routes/pullRequests.js';
 import { router as statsRouter } from './routes/stats.js';
 import { router as servicesRouter } from './routes/services.js';
 import { router as sandboxRouter } from './routes/sandbox.js';
@@ -75,6 +77,14 @@ app.use('/api/v1/projects', ingestRouter);
 // Incident Management REST APIs
 app.use('/api/v1/projects/:projectId/incidents', incidentsRouter);
 app.use('/api/v1/incidents', incidentsRouter);
+
+// Autonomous Fixes REST APIs
+app.use('/api/v1/projects/:projectId/fixes', fixesRouter);
+app.use('/api/v1/fixes', fixesRouter);
+
+// Pull Requests REST APIs
+app.use('/api/v1/projects/:projectId/pull-requests', pullRequestsRouter);
+app.use('/api/v1/pull-requests', pullRequestsRouter);
 
 // Stats & Metrics
 app.use('/api/v1/projects/:projectId/stats', statsRouter);

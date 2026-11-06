@@ -16,6 +16,7 @@ export const router = Router();
 const serverlessKafkaConfig = getServerlessKafkaConfig();
 const KAFKA_BROKERS = (process.env.KAFKA_BROKERS || 'localhost:9092').split(',');
 const KAFKA_ENABLED = process.env.KAFKA_ENABLED !== 'false';
+const KAFKA_TOPIC = process.env.KAFKA_TOPIC || 'telemetry-events';
 
 let producer = null;
 if (serverlessKafkaConfig) {
@@ -24,7 +25,7 @@ if (serverlessKafkaConfig) {
   const kafka = new Kafka({
     clientId: 'incident-gateway',
     brokers: KAFKA_BROKERS,
-    retry: { initialRetryTime: 100, retries: 2 }
+    retry: { initialRetryTime: 300, retries: 5 }
   });
   producer = kafka.producer();
   producer.connect()
@@ -85,7 +86,7 @@ router.post('/:projectId/ingest', authMiddleware, async (req, res) => {
           key: projectId,
           value: JSON.stringify(event)
         }));
-        await producer.send({ topic: 'telemetry-events', messages });
+        await producer.send({ topic: KAFKA_TOPIC, messages });
       } else {
         for (const event of validEvents) {
           await processEvent(event);

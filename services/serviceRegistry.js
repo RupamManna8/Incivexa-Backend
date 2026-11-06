@@ -31,21 +31,21 @@ export async function getServicesHealth() {
     })
   );
 
-  // Probe Serverless Kafka
+  // Probe Kafka / Custom Gateway
   try {
     const kafkaHealth = await checkServerlessKafkaHealth();
     if (kafkaHealth.configured) {
       results['kafka'] = {
-        name: 'Serverless Kafka (Aiven Cloud)',
+        name: kafkaHealth.provider === 'custom-kafka-gateway' ? 'Custom Kafka Gateway' : 'Serverless Kafka (Aiven Cloud)',
         status: kafkaHealth.status === 'connected' ? 'online' : (kafkaHealth.status === 'warning' ? 'degraded' : 'offline'),
-        provider: 'aiven-serverless',
+        provider: kafkaHealth.provider || 'aiven-serverless',
         topics: kafkaHealth.topics || [],
         details: kafkaHealth
       };
     }
   } catch (err) {
     results['kafka'] = {
-      name: 'Serverless Kafka (Aiven Cloud)',
+      name: 'Kafka Broker / Gateway',
       status: 'offline',
       error: err.message
     };

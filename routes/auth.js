@@ -214,37 +214,52 @@ router.post('/demo', async (req, res) => {
   try {
     const sessionToken = 'aim_demo_' + crypto.randomBytes(16).toString('hex');
     const demoData = {
-      username: 'alex_vance_sre',
-      displayName: 'Alex Vance',
-      email: 'alex.vance@sentinel-ops.io',
-      role: 'Staff Reliability Engineer & Incident Lead',
-      company: 'Autonomous Infrastructure Labs',
-      avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      username: 'IncivexaTester',
+      displayName: 'IncivexaTester',
+      email: 'incivexa-tester@gmail.com',
+      role: 'Staff SRE & Incident Commander',
+      company: 'Incivexa Engineering',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=IncivexaTester',
       sessionToken,
       authMethod: 'local',
       selectedRepo: {
         name: 'demo-repo',
-        fullName: 'sentinel/demo-repo',
-        repoUrl: 'https://github.com/sentinel/demo-repo',
+        fullName: 'incivexa/demo-repo',
+        repoUrl: 'demo-repo',
         defaultBranch: 'main',
         status: 'INDEXED',
-        chunkCount: 142
+        chunkCount: 42
       }
     };
 
     if (isDbConnected()) {
-      let user = await User.findOne({ email: demoData.email });
+      let user = await User.findOne({ $or: [{ email: demoData.email }, { username: demoData.username }] });
       if (user) {
         user.sessionToken = sessionToken;
+        user.displayName = demoData.displayName;
+        user.username = demoData.username;
+        user.email = demoData.email;
+        user.role = demoData.role;
+        user.company = demoData.company;
+        user.avatarUrl = demoData.avatarUrl;
+        user.selectedRepo = demoData.selectedRepo;
         await user.save();
       } else {
         user = await User.create(demoData);
       }
+
+      // Link demo-repo project to this authentic user account
+      const { Project } = await import('../models/Project.js');
+      await Project.updateMany(
+        { name: 'demo-repo' },
+        { $set: { userId: user._id, repoUrl: 'demo-repo', defaultBranch: 'main' } }
+      ).catch(() => {});
+
       return res.json({
         success: true,
         user: sanitizeUser(user),
         token: sessionToken,
-        message: 'Connected as Demo Operator'
+        message: 'Connected as IncivexaTester (Lead SRE)'
       });
     }
 

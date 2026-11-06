@@ -1,3 +1,4 @@
+import http from 'http';
 import https from 'https';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -8,14 +9,19 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 /**
- * Serverless Kafka Client (Aiven / Karapace / Confluent REST Proxy v2)
+ * Serverless / Custom Gateway Kafka Client
  *
  * Implements high-throughput event producing and consumer polling over
  * HTTP/HTTPS REST APIs without requiring heavy TCP broker connections
  * or ZooKeeper infrastructure.
  */
 
-// Custom agent with keep-alive for high-throughput HTTP REST calls
+// Custom agents with keep-alive for high-throughput HTTP/HTTPS REST calls
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 50
+});
+
 const httpsAgent = new https.Agent({
   keepAlive: true,
   maxSockets: 50,
@@ -26,7 +32,33 @@ const httpsAgent = new https.Agent({
  * Resolve Serverless Kafka credentials and endpoint from environment
  */
 export function getServerlessKafkaConfig() {
-  const rawUrl = process.env.KAFKA_AIVEN_URL || process.env.KAFKA_REST_URL;
+  // 1. Check for Custom Kafka Gateway (e.g., your Express Kafka REST server)
+  const customGatewayUrl = process.env.KAFKA_GATEWAY_URL || (process.env.KAFKA_REST_URL && !process.env.KAFKA_REST_URL.includes('aivencloud.com') ? process.env.KAFKA_REST_URL : null);
+  const customApiKey = process.env.KAFKA_GATEWAY_API_KEY || process.env.KAFKA_API_KEY || '';
+
+  if (customGatewayUrl && customGatewayUrl.trim().length > 0) {
+    try {
+      const cleanUrl = customGatewayUrl.trim().replace(/\/+$/, '');
+      const parsed = new URL(cleanUrl);
+      const topic = process.env.KAFKA_TOPIC || 'telemetry-events';
+
+      return {
+        enabled: true,
+        type: 'custom-gateway',
+        baseUrl: `${parsed.protocol}//${parsed.host}`,
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+        protocol: parsed.protocol,
+        apiKey: customApiKey,
+        topic
+      };
+    } catch (err) {
+      console.error('[Serverless Kafka] Invalid URL in KAFKA_GATEWAY_URL:', err.message);
+    }
+  }
+
+  // 2. Legacy Aiven Cloud / Karapace REST URL
+  const rawUrl = process.env.KAFKA_AIVEN_URL;
   if (!rawUrl || rawUrl.trim().length === 0) {
     return null;
   }
@@ -46,9 +78,11 @@ export function getServerlessKafkaConfig() {
 
     return {
       enabled: true,
+      type: 'karapace',
       baseUrl,
       hostname: parsed.hostname,
       port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+      protocol: parsed.protocol,
       username,
       password,
       authHeader,
@@ -61,7 +95,7 @@ export function getServerlessKafkaConfig() {
 }
 
 /**
- * Execute HTTP/HTTPS REST request to Kafka REST Proxy
+ * Execute HTTP/HTTPS REST request to Kafka REST Proxy / Custom Gateway
  */
 async function kafkaRestRequest(targetUrl, method = 'GET', body = null, extraHeaders = {}) {
   const config = getServerlessKafkaConfig();
@@ -81,17 +115,21 @@ async function kafkaRestRequest(targetUrl, method = 'GET', body = null, extraHea
 
   return new Promise((resolve, reject) => {
     const parsed = new URL(targetUrl);
-    const req = https.request({
+    const isHttps = parsed.protocol === 'https:';
+    const client = isHttps ? https : http;
+    const agent = isHttps ? httpsAgent : httpAgent;
+
+    const req = client.request({
       protocol: parsed.protocol,
       hostname: parsed.hostname,
-      port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+      port: parsed.port || (isHttps ? 443 : 80),
       path: parsed.pathname + parsed.search,
       method,
       headers: {
         ...headers,
         ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {})
       },
-      agent: httpsAgent,
+      agent,
       timeout: 8000
     }, (res) => {
       let responseText = '';
@@ -146,6 +184,48 @@ export async function produceServerlessEvents(topic, events, partitionKey = null
   }
 
   const targetTopic = topic || config.topic;
+
+  // 1. Custom Kafka Gateway Dispatch (POST /api/v1/kafka/publish with x-api-key)
+  if (config.type === 'custom-gateway') {
+    const endpoint = `${config.baseUrl}/api/v1/kafka/publish`;
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(config.apiKey ? { 'x-api-key': config.apiKey } : {})
+    };
+
+    // Provide both 'message' (single/array) and 'messages' (batch array) for compatibility
+    const payload = {
+      topic: targetTopic,
+      key: partitionKey ? String(partitionKey) : (events[0]?.projectId ? String(events[0].projectId) : 'default'),
+      message: events.length === 1 ? events[0] : events,
+      messages: events
+    };
+
+    try {
+      const res = await kafkaRestRequest(endpoint, 'POST', payload, headers);
+
+      if (res.status === 200 || res.status === 202) {
+        clusterUnreachableCooldownUntil = 0;
+        return { success: true, metadata: res.data?.metadata };
+      }
+
+      console.warn(`[Kafka Gateway] Publish returned status ${res.status}:`, res.data);
+      return { success: false, status: res.status, error: res.data };
+    } catch (err) {
+      const isConnOrDnsError = err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED' || err.message?.includes('ENOTFOUND');
+      if (isConnOrDnsError) {
+        clusterUnreachableCooldownUntil = Date.now() + 30000;
+      }
+
+      if (Date.now() - lastUnreachableNotice > 30000) {
+        console.warn(`[Kafka Gateway] Publish failed (${err.message}). Telemetry routing via direct processor fallback.`);
+        lastUnreachableNotice = Date.now();
+      }
+      return { success: false, error: err.message };
+    }
+  }
+
+  // 2. Legacy Karapace / Aiven Cloud Dispatch
   const endpoint = `${config.baseUrl}/topics/${targetTopic}`;
 
   const records = events.map(evt => ({
@@ -190,6 +270,24 @@ export async function checkServerlessKafkaHealth() {
   const config = getServerlessKafkaConfig();
   if (!config) {
     return { configured: false, status: 'disabled' };
+  }
+
+  // Custom Gateway Health Check
+  if (config.type === 'custom-gateway') {
+    try {
+      const res = await kafkaRestRequest(`${config.baseUrl}/health`, 'GET');
+      if (res.status === 200 && res.data?.success) {
+        return {
+          configured: true,
+          status: 'connected',
+          provider: 'custom-kafka-gateway',
+          services: res.data?.services || {}
+        };
+      }
+      return { configured: true, status: 'warning', statusCode: res.status, details: res.data };
+    } catch (err) {
+      return { configured: true, status: 'unreachable', error: err.message };
+    }
   }
 
   try {

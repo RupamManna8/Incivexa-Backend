@@ -25,7 +25,12 @@ router.get('/', optionalUserAuth, async (req, res) => {
 
       let query;
       // Demo operator sees demo projects
-      if (req.user.email === 'alex.vance@sentinel-ops.io' || req.user.username === 'alex_vance_sre') {
+      if (
+        req.user.email === 'incivexa-tester@gmail.com' ||
+        req.user.username === 'IncivexaTester' ||
+        req.user.email === 'alex.vance@sentinel-ops.io' ||
+        req.user.username === 'alex_vance_sre'
+      ) {
         query = {
           $or: [
             { userId: req.user._id },

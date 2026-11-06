@@ -10,6 +10,7 @@ dotenv.config();
 const serverlessKafkaConfig = getServerlessKafkaConfig();
 const KAFKA_BROKERS = (process.env.KAFKA_BROKERS || 'localhost:9092').split(',');
 const KAFKA_ENABLED = process.env.KAFKA_ENABLED !== 'false';
+const KAFKA_TOPIC = process.env.KAFKA_TOPIC || 'telemetry-events';
 
 // Mongoose Schema for raw Telemetry Event
 const EventSchema = new mongoose.Schema({
@@ -38,7 +39,7 @@ if (KAFKA_ENABLED) {
   const kafka = new Kafka({
     clientId: 'incident-processor',
     brokers: KAFKA_BROKERS,
-    retry: { initialRetryTime: 100, retries: 2 }
+    retry: { initialRetryTime: 300, retries: 8 }
   });
   consumer = kafka.consumer({ groupId: 'incident-processor-group' });
 }
@@ -49,6 +50,16 @@ if (KAFKA_ENABLED) {
 export async function processEvent(eventData) {
   try {
     const eventObj = typeof eventData === 'string' ? JSON.parse(eventData) : eventData;
+
+    // Handle batch arrays if received from broker or gateway
+    if (Array.isArray(eventObj)) {
+      const results = [];
+      for (const item of eventObj) {
+        const res = await processEvent(item);
+        if (res) results.push(res);
+      }
+      return results;
+    }
 
     if (eventObj.timestamp) {
       eventObj.timestamp = new Date(eventObj.timestamp);
@@ -74,14 +85,24 @@ export async function startWorker() {
   await connectDatabase();
 
   if (serverlessKafkaConfig) {
-    console.log(`[Worker] Serverless Kafka configured (${serverlessKafkaConfig.baseUrl}). Starting REST consumer...`);
-    const serverlessConsumer = new ServerlessKafkaConsumer({
-      onMessage: async (eventData) => {
-        await processEvent(eventData);
+    if (serverlessKafkaConfig.type === 'custom-gateway') {
+      console.log(`[Worker] Custom Kafka Gateway configured for publishing (${serverlessKafkaConfig.baseUrl}).`);
+      if (KAFKA_ENABLED && consumer) {
+        console.log(`[Worker] Connecting native Kafka consumer to broker: ${KAFKA_BROKERS.join(', ')}...`);
+      } else {
+        console.log('[Worker] Operating in direct processor mode for local event ingestion.');
+        return;
       }
-    });
-    await serverlessConsumer.start();
-    return serverlessConsumer;
+    } else {
+      console.log(`[Worker] Serverless Kafka configured (${serverlessKafkaConfig.baseUrl}). Starting REST consumer...`);
+      const serverlessConsumer = new ServerlessKafkaConsumer({
+        onMessage: async (eventData) => {
+          await processEvent(eventData);
+        }
+      });
+      await serverlessConsumer.start();
+      return serverlessConsumer;
+    }
   }
 
   if (KAFKA_ENABLED && consumer) {
@@ -98,8 +119,12 @@ export async function startWorker() {
       await consumer.connect();
       console.log('[Worker] Connected to Kafka Consumer.');
 
-      await consumer.subscribe({ topic: 'telemetry-events', fromBeginning: true });
-      console.log('[Worker] Subscribed to topic: telemetry-events');
+      const topicsToSubscribe = [KAFKA_TOPIC];
+      if (KAFKA_TOPIC !== 'telementry-events') {
+        topicsToSubscribe.push('telementry-events');
+      }
+      await consumer.subscribe({ topics: topicsToSubscribe, fromBeginning: true });
+      console.log(`[Worker] Subscribed to topic(s): ${topicsToSubscribe.join(', ')}`);
 
       await consumer.run({
         eachMessage: async ({ topic, partition, message }) => {

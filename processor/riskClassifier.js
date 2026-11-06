@@ -180,7 +180,7 @@ export async function classifyIncidentRisk(event, incident) {
  */
 async function triggerInvestigation(event, incident) {
   try {
-    const repoUrl = event.repo_url || incident.repoUrl || process.env.DEFAULT_REPO_URL || process.cwd();
+    const repoUrl = event.repo_url || incident.repoUrl || process.env.DEFAULT_REPO_URL || 'demo-repo';
     const commitSha = event.release_sha || incident.releaseSha || 'HEAD';
     const incidentId = incident._id ? incident._id.toString() : (incident.id || 'mock-id');
 

@@ -59,6 +59,19 @@ export const InvestigationSchema = new mongoose.Schema({
     affectedFiles: [{ type: String }]
   },
   relatedTests: [{ type: String }],
+  fixStatus: {
+    type: String,
+    enum: ['GENERATED', 'AWAITING_REVIEW', 'MERGED', 'REJECTED'],
+    default: 'GENERATED'
+  },
+  prUrl: { type: String, default: null },
+  prNumber: { type: Number, default: null },
+  prStatus: {
+    type: String,
+    enum: ['OPEN', 'MERGED', 'REJECTED', 'NONE'],
+    default: 'NONE'
+  },
+  prCreatedAt: { type: Date, default: null },
   error: { type: String, default: null },
   completedAt: { type: Date }
 }, {
