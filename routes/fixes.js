@@ -43,30 +43,38 @@ router.get('/', async (req, res) => {
 
     const pid = new mongoose.Types.ObjectId(projectId);
 
-    // Only return investigations that have a verified suggestedFix with a valid diff and HIGH confidence
+    // Retrieve all investigations for this project to support:
+    // 1. All Fixes (>= 90% confidence with generated patch)
+    // 2. Generated (all with patches)
+    // 3. Awaiting Review (< 90% confidence)
     const investigations = await Investigation.find({
-      projectId: pid,
-      confidence: 'HIGH',
-      'suggestedFix.diff': { $exists: true, $ne: null }
+      projectId: pid
     }).sort({ createdAt: -1 }).lean();
 
-    const verifiedInvs = investigations.filter(inv => {
-      const diff = inv.suggestedFix?.diff || '';
-      return diff.includes('--- a/') && diff.includes('+++ b/') && !diff.toLowerCase().includes('no specific code changes');
-    });
-
-    if (verifiedInvs.length === 0) {
+    if (investigations.length === 0) {
       return res.json({ fixes: [] });
     }
 
-    const incidentIds = verifiedInvs.map(i => i.incidentId).filter(id => mongoose.Types.ObjectId.isValid(id));
+    const incidentIds = investigations.map(i => i.incidentId).filter(id => mongoose.Types.ObjectId.isValid(id));
     const incidents = await Incident.find({ _id: { $in: incidentIds } }).lean();
     const incidentMap = new Map(incidents.map(inc => [inc._id.toString(), inc]));
 
-    const fixes = verifiedInvs.map(inv => {
+    const fixes = investigations.map(inv => {
       const inc = incidentMap.get(inv.incidentId?.toString()) || {};
-      const status = inv.fixStatus || 'AWAITING_REVIEW';
-      const diff = cleanDiff(inv.suggestedFix?.diff || '');
+      const rawDiff = inv.suggestedFix?.diff || '';
+      const hasPatch = Boolean(
+        rawDiff &&
+        rawDiff.includes('--- a/') &&
+        rawDiff.includes('+++ b/') &&
+        !rawDiff.toLowerCase().includes('no specific code changes')
+      );
+      const diff = hasPatch ? cleanDiff(rawDiff) : '';
+
+      const confidence = inv.confidenceScore != null
+        ? Math.round(inv.confidenceScore * 100)
+        : (inv.confidence === 'HIGH' ? 95 : (inv.confidence === 'MEDIUM' ? 75 : 35));
+
+      const status = inv.fixStatus || (confidence < 90 ? 'AWAITING_REVIEW' : (hasPatch ? 'GENERATED' : 'AWAITING_REVIEW'));
 
       return {
         _id: inv._id.toString(),
@@ -78,8 +86,8 @@ router.get('/', async (req, res) => {
         service: inc.service || 'demo-server',
         environment: inc.environment || 'production',
         rootCause: inv.rootCauseAnalysis?.summary || inv.rootCauseAnalysis?.mechanism || 'Code logic defect diagnosed',
-        proposedFix: inv.suggestedFix?.description || 'Defensive patch applied',
-        confidence: inv.confidenceScore ? Math.round(inv.confidenceScore * 100) : 95,
+        proposedFix: inv.suggestedFix?.description || (hasPatch ? 'Defensive patch applied' : 'Manual code review recommended'),
+        confidence,
         tests: null, // Strictly zero fake tests
         pr: inv.prUrl || null,
         prNumber: inv.prNumber || null,
@@ -108,7 +116,16 @@ router.get('/', async (req, res) => {
  */
 router.patch('/:fixId/status', async (req, res) => {
   const { fixId } = req.params;
-  const { status, note } = req.body;
+  const { status, note, username } = req.body;
+  const userName = req.headers['x-user-name'] || username;
+
+  // Requirement 4: Action restricted for test user (IncivexaTester)
+  if (userName === 'IncivexaTester') {
+    return res.status(403).json({
+      error: 'Action restricted for test user',
+      message: 'Action for restricted for test user'
+    });
+  }
 
   const validStatuses = ['GENERATED', 'AWAITING_REVIEW', 'MERGED', 'REJECTED'];
   if (!status || !validStatuses.includes(status)) {

@@ -108,7 +108,15 @@ router.get('/', async (req, res) => {
  */
 router.post('/:prId/merge', async (req, res) => {
   const { prId } = req.params;
-  const { note } = req.body;
+  const { note, username } = req.body;
+  const userName = req.headers['x-user-name'] || username;
+
+  if (userName === 'IncivexaTester') {
+    return res.status(403).json({
+      error: 'Action restricted for test user',
+      message: 'Action for restricted for test user'
+    });
+  }
 
   try {
     if (!isDbConnected() || !mongoose.Types.ObjectId.isValid(prId)) {
@@ -156,7 +164,15 @@ router.post('/:prId/merge', async (req, res) => {
  */
 router.post('/:prId/reject', async (req, res) => {
   const { prId } = req.params;
-  const { note } = req.body;
+  const { note, username } = req.body;
+  const userName = req.headers['x-user-name'] || username;
+
+  if (userName === 'IncivexaTester') {
+    return res.status(403).json({
+      error: 'Action restricted for test user',
+      message: 'Action for restricted for test user'
+    });
+  }
 
   try {
     if (!isDbConnected() || !mongoose.Types.ObjectId.isValid(prId)) {
