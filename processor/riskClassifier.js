@@ -1,5 +1,6 @@
 import http from 'http';
 import dotenv from 'dotenv';
+import { redisService } from '../services/redisService.js';
 
 dotenv.config();
 
@@ -163,9 +164,17 @@ export async function classifyIncidentRisk(event, incident) {
 
     console.log(`[Risk-Classifier] ✅ ${incident.title} → ${prediction.risk_level} (score: ${prediction.risk_score.toFixed(3)}, confidence: ${(prediction.confidence * 100).toFixed(1)}%)`);
 
-    // Trigger Investigation Engine for HIGH and CRITICAL risk incidents
+    // Trigger Investigation Engine for HIGH and CRITICAL risk incidents (deduped via Redis)
     if (prediction.risk_level === 'HIGH' || prediction.risk_level === 'CRITICAL') {
-      triggerInvestigation(event, incident);
+      const dedupeKey = incident.primaryHash || (incident._id ? incident._id.toString() : incident.id);
+      const incidentId = incident._id ? incident._id.toString() : (incident.id || 'mock-id');
+
+      const { isDuplicate, value } = await redisService.checkAndMarkIncidentAnalysis(dedupeKey, incidentId);
+      if (isDuplicate) {
+        console.log(`[Risk-Classifier] ⏭️ Skipping duplicate incident investigation for ${incident.title} (already analyzed in Redis: ${value})`);
+      } else {
+        triggerInvestigation(event, incident);
+      }
     }
 
     return prediction;
